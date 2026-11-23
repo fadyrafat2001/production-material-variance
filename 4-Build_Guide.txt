@@ -1,0 +1,207 @@
+POWER BI BUILD PACK | REVIEW DRAFT
+
+Status: preparation assets only. No PBIX or executed M/DAX/report is included. Synthetic data only. Prepared with assistant support; review, test and adapt before portfolio publication.
+
+The accompanying Power_BI_Synthetic_Inputs.xlsx contains five named sheets. For this packaging use the Excel import route described below, not the CSV import query unchanged. Original CSVs and exact CSV-based query are retained separately.
+
+EXCEL IMPORT ROUTE
+1. In Power BI Desktop choose Get data > Excel workbook and select Power_BI_Synthetic_Inputs.xlsx. Select Orders, MaterialInput, DimProduct, DimMaterial and DimMonth, then Transform Data.
+2. Rename MaterialInput to FactMaterial. Set Order_ID, Month, Product and Material to Text. Actual_Output_units to Whole Number. All other input number columns to Decimal Number. In Orders set keys to Text and output columns to Whole Number. Set all dimension columns to Text.
+3. On FactMaterial choose Add Column > Custom Column, name Standard_Allowed_kg, formula [Actual_Output_units] * [Standard_kg_per_unit], then set Decimal Number. This is equivalent to the final step of the CSV-based M below.
+4. Close & Apply, then follow the relationships, measures and tests below. Do not load the Instructions sheet. Do not claim the import has passed until it is run.
+
+
+======================================================================
+DATA DICTIONARY
+======================================================================
+# Data dictionary
+Synthetic inputs only. CSVs use UTF-8, comma delimiters, dot decimals and a header row.
+
+## production_orders.csv
+One row per Order_ID (36 unique keys). Month is YYYY-MM. Product is one of Panel A/B/C. Planned_Output_units is the original planned finished output; Actual_Output_units is achieved finished output. Quantities are units, not kg.
+
+## material_consumption.csv
+One row per Order_ID + Material (72 unique pairs). Each order has Resin and Filler.
+Actual_Output_units repeats by material solely to compute the allowed material quantity; it is not additive across materials.
+Standard_kg_per_unit is the standard input mass per finished unit.
+Standard_Price_EGP_per_kg is the standard material price.
+Actual_Consumed_kg is material issued and consumed.
+Actual_Issue_Price_EGP_per_kg is the per-kg cost of that consumption, not a purchase transaction.
+
+## Dimensions
+DimProduct: 3 unique Product values; DimMaterial: 2 unique Material values; DimMonth: 3 unique Month values. All fact keys must be found in these dimensions.
+DimMonth is a period dimension, not a daily date table. No built-in time-intelligence calculations are claimed.
+
+
+======================================================================
+CSV-BASED M SOURCE (exact original, for CSV route only)
+======================================================================
+// Draft M. Not executed in Power Query. Create text parameter DataFolder first.
+let
+    Source = Csv.Document(File.Contents(DataFolder & "material_consumption.csv"), [Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle.Csv]),
+    Headers = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
+    Typed = Table.TransformColumnTypes(Headers, {{"Order_ID", type text}, {"Month", type text}, {"Product", type text}, {"Material", type text}, {"Actual_Output_units", Int64.Type}, {"Standard_kg_per_unit", type number}, {"Standard_Price_EGP_per_kg", type number}, {"Actual_Consumed_kg", type number}, {"Actual_Issue_Price_EGP_per_kg", type number}}, "en-US"),
+    Allowed = Table.AddColumn(Typed, "Standard_Allowed_kg", each [Actual_Output_units] * [Standard_kg_per_unit], type number)
+in
+    Allowed
+
+
+======================================================================
+DAX MEASURE DEFINITIONS (exact source, add separately)
+======================================================================
+// Draft definitions. Add each measure separately in Desktop. Not executed in DAX.
+Standard Cost EGP = SUMX(FactMaterial, FactMaterial[Standard_Allowed_kg] * FactMaterial[Standard_Price_EGP_per_kg])
+
+Actual Cost EGP = SUMX(FactMaterial, FactMaterial[Actual_Consumed_kg] * FactMaterial[Actual_Issue_Price_EGP_per_kg])
+
+Price Variance EGP = SUMX(FactMaterial, FactMaterial[Actual_Consumed_kg] * (FactMaterial[Actual_Issue_Price_EGP_per_kg] - FactMaterial[Standard_Price_EGP_per_kg]))
+
+Usage Variance EGP = SUMX(FactMaterial, (FactMaterial[Actual_Consumed_kg] - FactMaterial[Standard_Allowed_kg]) * FactMaterial[Standard_Price_EGP_per_kg])
+
+Total Variance EGP = [Actual Cost EGP] - [Standard Cost EGP]
+
+Variance Pct = DIVIDE([Total Variance EGP], [Standard Cost EGP])
+
+Reconciliation EGP = [Total Variance EGP] - [Price Variance EGP] - [Usage Variance EGP]
+
+Order Count = DISTINCTCOUNT(FactMaterial[Order_ID])
+
+Actual Output Units = SUM(Orders[Actual_Output_units])
+
+Planned Output Units = SUM(Orders[Planned_Output_units])
+
+// Guard against a misleading material-level output denominator.
+Actual Output Units Safe = IF(ISCROSSFILTERED(DimMaterial[Material]), BLANK(), [Actual Output Units])
+
+
+======================================================================
+MODEL, REPORT BUILD AND TEST INSTRUCTIONS
+======================================================================
+# Power BI Desktop build and acceptance
+
+Status: source assets only, not an executed Power BI report.
+
+1. Put the two input CSVs from `data/` in one local folder. Create a text parameter `DataFolder` ending with your operating system path separator. Create a blank query named `FactMaterial`; paste `FactMaterial.pq` into Advanced Editor.
+2. Import `production_orders.csv` as `Orders`. Keep Month/Product/Order_ID as text, output columns whole numbers. Import the three dimension CSVs from this folder as DimProduct, DimMaterial and DimMonth, with text columns.
+3. Remove auto-created relationships. Create active one-to-many single-direction relationships from DimProduct[Product] to BOTH fact tables' Product; from DimMonth[Month] to BOTH fact tables' Month; from DimMaterial[Material] to FactMaterial[Material]. Five relationships total. No fact-to-fact relationship, no bi-directional filters.
+4. Hide repeated FactMaterial[Actual_Output_units] and technical keys from report view. Use dimension fields for slicers. There is intentionally no material filter on Orders.
+5. Create measures in `Measures.dax` one at a time. Format cost measures as EGP with two decimals and Variance Pct as percent. Positive = adverse everywhere. Do not sum prices or ratios.
+6. Page 1: cards for Standard Cost, Actual Cost, Total Variance and Variance Pct. Product and month slicers. Clustered bar of price/usage variance by product. Monthly line for actual/standard cost. A note about synthetic data and consumed-material-only scope.
+7. Page 2: order/material detail matrix with standard cost, actual cost, price variance, usage variance and total. Add Order_ID drill-through from page 1 and a Back button. Do not display output by material.
+8. Page 3: data-quality cards for order count 36, material line count 72 and reconciliation 0. Add uniqueness, null and unmatched-key checks in Power Query. Do not publish a QA pass until those checks run.
+9. Test whole dataset and each product/month filter against EXPECTED_RESULTS.json. The total 438,949.52 must equal 256,311.44 + 182,638.08. Panel C total must be 226,238.76. September total must be 327,687.88.
+10. Test material slicer deliberately: costs should filter, but Orders output should not. Use Actual Output Units Safe or omit output cards from material-filtered pages. Test combined filters and clear-all; reconciliation should stay under EGP 0.01.
+11. Save as PBIX. Capture Overview, Details and Model view screenshots; record Power BI Desktop version, refresh time and results. Add an honest README implementation status before asking to publish.
+
+No date intelligence, RLS, incremental refresh or gateway is implemented. The monthly dimension is not a marked date table. These features are not necessary to demonstrate this case well.
+
+
+======================================================================
+EXPECTED RESULTS
+======================================================================
+{
+  "orders": 36,
+  "material_lines": 72,
+  "totals": {
+    "standard": 7349004.0,
+    "actual": 7787953.52,
+    "price": 256311.44,
+    "usage": 182638.08,
+    "variance": 438949.52,
+    "reconciliation": 0.0
+  },
+  "by_product": {
+    "Panel A": [
+      1893996.0,
+      1972362.84,
+      54251.88,
+      24114.96,
+      78366.84
+    ],
+    "Panel B": [
+      2435040.0,
+      2569383.92,
+      97633.28,
+      36710.64,
+      134343.92
+    ],
+    "Panel C": [
+      3019968.0,
+      3246206.76,
+      104426.28,
+      121812.48,
+      226238.76
+    ]
+  },
+  "by_month": {
+    "2026-07": [
+      2458512.0,
+      2534878.08,
+      35199.36,
+      41166.72,
+      76366.08
+    ],
+    "2026-08": [
+      2424384.0,
+      2459279.56,
+      20028.28,
+      14867.28,
+      34895.56
+    ],
+    "2026-09": [
+      2466108.0,
+      2793795.88,
+      201083.8,
+      126604.08,
+      327687.88
+    ]
+  }
+}
+
+======================================================================
+PROJECT README
+======================================================================
+# Production material cost variance
+
+**Review draft. Synthetic data. Assistant-prepared starter case study, not prior independent work or real business results.**
+
+## Business question
+How much of the direct-material cost overrun comes from issue prices, and how much from consumption above the quantity allowed for actual output?
+
+## What exists
+- Working Excel workbook with formulas, product/month summaries and chart.
+- 36 synthetic orders and 72 order/material lines across July to September 2026.
+- CSV inputs, a data dictionary, and independently calculated acceptance totals.
+- Power BI preparation assets: M import/transformation query, DAX measures, dimension CSVs, relationship and report build instructions.
+
+## What does not exist yet
+No PBIX, implemented Power BI model, rendered Power BI report or executed M/DAX is included. The Power BI assets require Desktop build and testing. The Excel workbook is not a Power BI report. No PivotTable or Excel Data Model is implemented in the workbook.
+
+## Open the Excel example
+Open `Production_Material_Variance.xlsx`, start at Summary, then read Guide. Blue numerical cells on Material detail are inputs. Formula ranges cover the original 72 rows; extend the ranges and charts if adding rows. The underlying dataset is in `data/`.
+
+## Method
+Standard allowed kg = actual output × standard kg per finished unit.
+Standard cost = standard allowed kg × standard price.
+Actual cost = actual consumed kg × actual issue price.
+Price variance = actual consumed kg × (actual issue price - standard price).
+Usage variance = (actual consumed kg - standard allowed kg) × standard price.
+Total variance = actual cost - standard cost = price variance + usage variance.
+
+Positive means adverse; negative means favourable. All prices are illustrative EGP/kg. The price variance is measured on consumption, not purchase quantities. Planned output is context only, not the cost comparison baseline.
+
+## Findings in the designed scenario
+Standard allowed cost: EGP 7,349,004.00. Actual material cost: EGP 7,787,953.52.
+Adverse total: EGP 438,949.52 (5.97%). Price: EGP 256,311.44. Usage: EGP 182,638.08.
+September contributes EGP 327,687.88 of the variance. Panel C contributes EGP 226,238.76 across the full period. These are designed sample patterns, not evidence of a real cost saving or a cause such as supplier failure.
+
+## Acceptance and scope
+All 72 detail lines and total reconcile to zero within EGP 0.01. See `docs/EXPECTED_RESULTS.json`.
+Only consumed direct materials are covered. Labour, overhead, inventory valuation, profit and mix/yield splits are excluded.
+The output units repeat across materials; do not sum output from the material fact. Use the Orders table for output measures.
+
+## Attribution and sources
+Prepared with assistant support for review and learning. Review, test, adapt and be ready to explain the work before presenting it as a portfolio project.
+Method reference: https://www.accaglobal.com/gb/en/student/exam-support-resources/fundamentals-exams-study-resources/f5/technical-articles/mat-yield.html
+Model reference: https://learn.microsoft.com/en-us/power-bi/guidance/star-schema
+DAX reference: https://learn.microsoft.com/en-us/dax/sumx-function-dax

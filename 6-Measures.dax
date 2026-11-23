@@ -1,0 +1,23 @@
+// Draft definitions. Add each measure separately in Desktop. Not executed in DAX.
+Standard Cost EGP = SUMX(FactMaterial, FactMaterial[Standard_Allowed_kg] * FactMaterial[Standard_Price_EGP_per_kg])
+
+Actual Cost EGP = SUMX(FactMaterial, FactMaterial[Actual_Consumed_kg] * FactMaterial[Actual_Issue_Price_EGP_per_kg])
+
+Price Variance EGP = SUMX(FactMaterial, FactMaterial[Actual_Consumed_kg] * (FactMaterial[Actual_Issue_Price_EGP_per_kg] - FactMaterial[Standard_Price_EGP_per_kg]))
+
+Usage Variance EGP = SUMX(FactMaterial, (FactMaterial[Actual_Consumed_kg] - FactMaterial[Standard_Allowed_kg]) * FactMaterial[Standard_Price_EGP_per_kg])
+
+Total Variance EGP = [Actual Cost EGP] - [Standard Cost EGP]
+
+Variance Pct = DIVIDE([Total Variance EGP], [Standard Cost EGP])
+
+Reconciliation EGP = [Total Variance EGP] - [Price Variance EGP] - [Usage Variance EGP]
+
+Order Count = DISTINCTCOUNT(FactMaterial[Order_ID])
+
+Actual Output Units = SUM(Orders[Actual_Output_units])
+
+Planned Output Units = SUM(Orders[Planned_Output_units])
+
+// Guard against a misleading material-level output denominator.
+Actual Output Units Safe = IF(ISCROSSFILTERED(DimMaterial[Material]), BLANK(), [Actual Output Units])
